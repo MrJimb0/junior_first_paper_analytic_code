@@ -312,9 +312,22 @@ table1 <- bind_rows(tbl2_rows)
 
 # TABLE S2: Accuracy across variables by ingestion strategy
 
+# "X%\n[lo - hi]" with an exact (Clopper-Pearson) 95% CI
+fmt_exact_pct_ci <- function(k, n) {
+  if (n == 0) return("\u2014")
+  ci <- binom.test(k, n)$conf.int
+  sprintf("%.0f%%\n[%.0f - %.0f]", 100 * k / n, 100 * ci[1], 100 * ci[2])
+}
+
 compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
   m <- inner_join(exp_df, gt_df, by = "gsID")
   rows <- list()
+  # Scoring rules shared with Figure 2: a missing diagnosis date counts as wrong;
+  # recurrence measures exclude de novo stage 4 (metastatic at presentation), and
+  # recurrence dates are scored among events found by both sources, with detection
+  # reported separately as sensitivity and PPV.
+  de_novo_stage4 <- coalesce(m$gt_stage == "4", FALSE)
+  recurrence_date_vars <- c("Date of locoregional recurrence", "Date of metastatic diagnosis")
 
   # Date variables
   date_vars <- list(
@@ -326,8 +339,10 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
   for (vname in names(date_vars)) {
     cols <- date_vars[[vname]]
     if (!cols[1] %in% names(m)) next
-    n_gt        <- sum(!is.na(m[[cols[2]]]))
-    vec <- date_agree_vec(m[[cols[1]]], m[[cols[2]]], tol)
+    scored      <- if (vname %in% recurrence_date_vars) m[!de_novo_stage4, ] else m
+    n_gt        <- sum(!is.na(scored[[cols[2]]]))
+    vec <- date_agree_vec(scored[[cols[1]]], scored[[cols[2]]], tol,
+                          na_as_wrong = vname == "Date of initial diagnosis")
     if (length(vec) == 0) next
     ci <- boot_ci(vec, mean)
     rows <- c(rows, list(tibble(
@@ -425,6 +440,36 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
     }
   }
 
+  # Recurrence detection among stage 1-3 patients: sensitivity / PPV with exact
+  # (Clopper-Pearson) 95% CIs. A source without a column (coordinators did not
+  # abstract locoregional recurrence) gets no row for that event.
+  stage13 <- m[!de_novo_stage4, ]
+  has_event <- function(cols) {
+    if (!all(cols %in% names(stage13))) return(NULL)
+    Reduce(`|`, lapply(cols, function(column) !is.na(stage13[[column]])))
+  }
+  detection_events <- list(
+    "Any recurrence"          = list(c("lrr_dx", "met_dx"), c("gt_lrr_dx", "gt_met_dx")),
+    "Locoregional recurrence" = list("lrr_dx", "gt_lrr_dx"),
+    "Metastatic recurrence"   = list("met_dx", "gt_met_dx"))
+  for (event in names(detection_events)) {
+    predicted <- has_event(detection_events[[event]][[1]])
+    reference <- has_event(detection_events[[event]][[2]])
+    if (is.null(predicted) || is.null(reference)) next
+    true_positives <- sum(predicted & reference)
+    for (measure in c("sensitivity", "PPV")) {
+      denominator <- if (measure == "sensitivity") sum(reference) else sum(predicted)
+      rows <- c(rows, list(tibble(
+        Variable = paste0(event, ": ", measure), Category = "Detection", LLM = exp_name,
+        Tolerance       = "Event present",
+        N_GT            = sum(reference),
+        N               = denominator,
+        Extraction_Rate = "\u2014",
+        Agreement       = fmt_exact_pct_ci(true_positives, denominator)
+      )))
+    }
+  }
+
   bind_rows(rows)
 }
 
@@ -473,6 +518,12 @@ var_to_row <- c(
   "Date of locoregional recurrence"  = "Date of first locoregional recurrence (\u00b190 d)",
   "Date of metastatic diagnosis"     = "Date of first metastatic diagnosis (\u00b190 d)",
   "Recurrence occurred"              = "Recurrence occurred (yes/no)",
+  "Any recurrence: sensitivity" = "Any recurrence: sensitivity",
+  "Any recurrence: PPV" = "Any recurrence: PPV",
+  "Locoregional recurrence: sensitivity" = "Locoregional recurrence: sensitivity",
+  "Locoregional recurrence: PPV" = "Locoregional recurrence: PPV",
+  "Metastatic recurrence: sensitivity" = "Metastatic recurrence: sensitivity",
+  "Metastatic recurrence: PPV" = "Metastatic recurrence: PPV",
   "HR/HER2 subtype"                  = "Original HR/HER2 subtype",
   "HR status"                        = "Hormone receptor status",
   "HER2 status"                      = "HER2 status",
@@ -517,7 +568,9 @@ nondrug_wide <- tbl2_all %>%
   {tbl <- .; for (cn in all_col_names) if (!cn %in% names(tbl)) tbl[[cn]] <- "\u2014"; tbl} %>%
   mutate(
     `Clinical domain / variable` = row_label,
-    `Metric reported`            = "% agreement (95% CI)",
+    `Metric reported`            = if_else(grepl("sensitivity|PPV", row_label),
+                                           "% (exact 95% CI)",
+                                           "% agreement (95% CI)"),
     `Second oncologist`          = "\u2014",
     across(all_of(all_col_names), ~ coalesce(.x, "\u2014"))
   ) %>%
@@ -532,6 +585,12 @@ row_order_nondrug <- c(
   "Date of first locoregional recurrence (\u00b190 d)",
   "Date of first metastatic diagnosis (\u00b190 d)",
   "Recurrence occurred (yes/no)",
+  "Any recurrence: sensitivity",
+  "Any recurrence: PPV",
+  "Locoregional recurrence: sensitivity",
+  "Locoregional recurrence: PPV",
+  "Metastatic recurrence: sensitivity",
+  "Metastatic recurrence: PPV",
   "Original HR/HER2 subtype",
   "Hormone receptor status",
   "HER2 status",
@@ -919,7 +978,13 @@ nondrug_sectioned <- bind_rows(
              "Date of diagnosis (\u00b190 d)",
              "Date of first locoregional recurrence (\u00b190 d)",
              "Date of first metastatic diagnosis (\u00b190 d)",
-             "Recurrence occurred (yes/no)")),
+             "Recurrence occurred (yes/no)",
+             "Any recurrence: sensitivity",
+             "Any recurrence: PPV",
+             "Locoregional recurrence: sensitivity",
+             "Locoregional recurrence: PPV",
+             "Metastatic recurrence: sensitivity",
+             "Metastatic recurrence: PPV")),
   make_header_row("Clinical information"),
   filter(nondrug_wide, `Clinical domain / variable` %in%
            c("Original HR/HER2 subtype",

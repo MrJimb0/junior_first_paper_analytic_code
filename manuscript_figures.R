@@ -17,9 +17,9 @@ set.seed(RANDOM_SEED)
 
 ### Helper functions
 
-# is_crc = TRUE: met_dx comparison gives CRC credit for being within tol of
-# EITHER GT LRR or GT met_dx; denominator = patients with any pre-censor GT
-# recurrence (GT LRR < CRC_CENSOR_DATE or GT met_dx < CRC_CENSOR_DATE).
+# is_crc = TRUE: the coordinator's metastatic date is scored against the expert's
+# metastatic date only, among stage 1-3 patients with an expert metastatic date
+# before CRC_CENSOR_DATE and a coordinator metastatic date.
 compute_agreement <- function(exp_df, exp_name, gt_df, tol = TOL_PRIMARY,
                               is_crc = FALSE) {
   m    <- inner_join(exp_df, gt_df, by = 'gsID')
@@ -35,12 +35,12 @@ compute_agreement <- function(exp_df, exp_name, gt_df, tol = TOL_PRIMARY,
 
   # Dates
   n_init  <- sum(!is.na(gt_df$gt_init_dx))
-  n_lrr   <- sum(!is.na(gt_df$gt_lrr_dx))
   n_birth <- sum(!is.na(gt_df$gt_birth))
-  # Met dx: recurrent metastases only -- exclude de novo Stage 4 patients
+  # Recurrence dates: recurrences only -- exclude de novo Stage 4 patients
   stage4_gsids <- if ('gt_stage' %in% names(gt_df))
     gt_df$gsID[!is.na(gt_df$gt_stage) & gt_df$gt_stage == '4']
   else character(0)
+  n_lrr   <- sum(!is.na(gt_df$gt_lrr_dx) & !(gt_df$gsID %in% stage4_gsids))
   n_met <- sum(!is.na(gt_df$gt_met_dx) &
                !(gt_df$gsID %in% stage4_gsids))
   date_vars <- setNames(
@@ -57,7 +57,8 @@ compute_agreement <- function(exp_df, exp_name, gt_df, tol = TOL_PRIMARY,
     # LRR/birth: na_as_wrong=FALSE -- detection captured by "Patient Had Recurrence" row;
     #   date accuracy assessed only among matched cases (both sides have a date)
     use_strict <- cols[1] == 'init_dx'
-    add_row(vname, 'Dates', date_agree_vec(m[[cols[1]]], m[[cols[2]]], tol,
+    scored <- if (cols[1] == 'lrr_dx') m %>% filter(!(gsID %in% stage4_gsids)) else m
+    add_row(vname, 'Dates', date_agree_vec(scored[[cols[1]]], scored[[cols[2]]], tol,
                                            na_as_wrong = use_strict))
   }
   # Metastatic date: recurrent cases only (exclude de novo Stage 4).
@@ -879,10 +880,11 @@ recur_agree <- function(d, strategy_name, censor_date = NULL) {
 
 recur_rows <- map2_dfr(all_llm_data, ALL_LLMS,
                        ~ recur_agree(.x, LLM_LABELS[.y]))
+# Scored but not shown: coordinators abstracted no locoregional recurrence, so their
+# recurrence status is not comparable. Scoring it keeps the random-number stream, and
+# so every later bootstrap and jitter, the same as when the row was plotted.
 if (!is.null(crc_fig2))
-  recur_rows <- bind_rows(recur_rows,
-                          recur_agree(crc_fig2, 'Research Coordinator',
-                                      censor_date = CRC_CENSOR_DATE))
+  invisible(recur_agree(crc_fig2, 'Research Coordinator', censor_date = CRC_CENSOR_DATE))
 
 recur_rows <- bind_rows(recur_rows, recur_agree(v2_fig2, 'Second Oncologist'))
 
