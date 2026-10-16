@@ -351,7 +351,7 @@ build_line_metrics <- function() {
                 as.list(values)))
 
   s2_line_rows <- bind_rows(
-    s2_row("Systemic therapy lines: regimen Jaccard (order-aware matched lines)", "Mean [95% CI]", metric_values("Exact-line (content) Jaccard")),
+    s2_row("Systemic therapy lines: exact-line Jaccard (order-aware matched lines)", "Mean [95% CI]", metric_values("Exact-line (content) Jaccard")),
     s2_row("Systemic therapy lines: regimen-set Jaccard (order-agnostic, reference)", "Mean [95% CI]", metric_values("Unique-regimen-set Jaccard")),
     s2_row("Systemic therapy lines: line-start detection precision", "Mean (95% CI)", metric_values("Line-start precision")),
     s2_row("Systemic therapy lines: line-start detection recall", "Mean (95% CI)", metric_values("Line-start recall")),
