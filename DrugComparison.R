@@ -115,6 +115,14 @@ for (m in llms) {
     )
 }
 
+# The two best-performing LLMs compared with each other
+wide_bag_of_drugs_by_patient_version[["jaccard_gemini_2_5_vs_gpt5"]] <-
+  map2_dbl(
+    wide_bag_of_drugs_by_patient_version[["gemini_2_5"]],
+    wide_bag_of_drugs_by_patient_version[["gpt5"]],
+    jaccard_set
+  )
+
 # Fair CRC bag Jaccard: rebuild v1 drug sets censored at CRC_CENSOR_DATE
 v1_bags_crc <- df_v1_crc %>%
   separate_rows(regimen_bag_of_drugs, sep = ",") %>%

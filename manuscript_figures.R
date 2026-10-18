@@ -285,16 +285,6 @@ plot_km <- function(data, title_str, pal,
     }
   }
 
-  # Pairwise log-rank vs first source (reference/GT) on full data
-  ref_src <- src_names[1]
-  ref_data <- data %>% filter(source == ref_src)
-  lr_lbls <- vapply(src_names[-1], function(s) {
-    pair <- bind_rows(ref_data, data %>% filter(source == s))
-    lr <- survdiff(Surv(T_months, event) ~ source, data = pair)
-    sprintf('%s: %s', s, fmt_p(
-      pchisq(lr$chisq, df = 1, lower.tail = FALSE)))
-  }, character(1))
-
   # Median survival from full (uncensored) data
   med_tbl <- summary(km_fit_full)$table
   if (is.null(dim(med_tbl)))
@@ -318,9 +308,7 @@ plot_km <- function(data, title_str, pal,
   box_pad  <- x_max * 0.01
   box_top  <- 0.99
   line_h   <- 0.036
-  lr_line_h <- line_h * 0.75
-  n_lr     <- length(lr_lbls)
-  box_h    <- line_h * (nrow(med_df) + 1) + lr_line_h * n_lr
+  box_h    <- line_h * (nrow(med_df) + 1)
 
   med_annotations <- list(
     annotate('rect',
@@ -345,14 +333,6 @@ plot_km <- function(data, title_str, pal,
       annotate('text', x = box_right - box_pad, y = y_row,
                hjust = 1, vjust = 0.5, size = 2.6,
                family = 'Helvetica', color = col, label = vals)))
-  }
-  lr_y_start <- box_top - line_h * (nrow(med_df) + 1)
-  for (j in seq_along(lr_lbls)) {
-    med_annotations <- c(med_annotations, list(
-      annotate('text', x = (box_left + box_right) / 2,
-               y = lr_y_start - lr_line_h * (j - 0.5),
-               hjust = 0.5, vjust = 0.5, size = 2.2, fontface = 'italic',
-               family = 'Helvetica', color = 'grey40', label = lr_lbls[j])))
   }
 
   # Risk table (from plot-censored data)
@@ -1168,7 +1148,7 @@ p_fig3 <- (p_os | p_rfs)
 ggsave(file.path(FIG_DIR, 'Fig3_KM_curves.png'), p_fig3,
        width = 16, height = 6.5, dpi = 300, bg = 'white')
 
-# -- Inline stats: OS and RFS medians + pairwise log-rank p (for manuscript text)
+# -- Inline stats: OS and RFS medians (for manuscript text); paired differences are in paired_bootstrap_differences.R
 cat('\n=== Fig 3 KM inline stats (lower bound, for manuscript text) ===\n')
 for (km_obj in list(list(data = all_os_lb, label = 'Overall Survival'),
                     list(data = all_rfs_lb, label = 'Recurrence-Free Survival'))) {
@@ -1183,16 +1163,6 @@ for (km_obj in list(list(data = all_os_lb, label = 'Overall Survival'),
   for (i in seq_len(nrow(med_tbl))) {
     src <- str_remove(rownames(med_tbl)[i], 'source=')
     cat(sprintf('    %-25s median = %.1f months\n', src, med_tbl[i, 'median']))
-  }
-
-  # Pairwise log-rank: each LLM vs Expert-derived
-  gt_data <- km_data %>% filter(source == 'Expert-derived')
-  llm_sources <- setdiff(unique(as.character(km_data$source)), 'Expert-derived')
-  for (llm_src in llm_sources) {
-    pair_data <- bind_rows(gt_data, km_data %>% filter(source == llm_src))
-    lr <- survdiff(Surv(T_months, event) ~ source, data = pair_data)
-    lr_p <- pchisq(lr$chisq, df = 1, lower.tail = FALSE)
-    cat(sprintf('    Log-rank %s vs GT: %s\n', llm_src, fmt_p(lr_p)))
   }
 
   # 5-year survival estimates (per source)
