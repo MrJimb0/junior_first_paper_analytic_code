@@ -303,31 +303,59 @@ build_line_metrics <- function() {
     missed = sum(n_ref) - sum(n_match), additional_predicted = sum(n_pred) - sum(n_match),
     .groups = "drop") %>% arrange(match(model, ALL_COMPARATORS))
 
-  metric_row <- function(comparator) {
+  metric_intervals <- function(comparator) {
     patient_rows <- per_patient %>% filter(model == !!comparator)
+    list(
+      jaccard       = bootstrap_mean_ci(patient_rows$jaccard_matched),
+      unique_set    = bootstrap_mean_ci(patient_rows$jaccard_uniqueset),
+      start_prec    = bootstrap_mean_ci(patient_rows$start_prec),
+      start_rec     = bootstrap_mean_ci(patient_rows$start_rec),
+      start_f1      = bootstrap_mean_ci(patient_rows$start_f1),
+      exact_prec    = bootstrap_mean_ci(patient_rows$exact_prec),
+      exact_rec     = bootstrap_mean_ci(patient_rows$exact_rec),
+      exact_f1      = bootstrap_mean_ci(patient_rows$exact_f1),
+      exseq_f1      = bootstrap_mean_ci(patient_rows$exseq_f1),
+      start_agree   = bootstrap_mean_ci(patient_rows$start_agree, sum(patient_rows$st_ok), sum(patient_rows$st_n)),
+      stop_agree    = bootstrap_mean_ci(patient_rows$stop_agree, sum(patient_rows$sp_ok), sum(patient_rows$sp_n)),
+      intent_agree  = bootstrap_mean_ci(patient_rows$intent_agree, sum(patient_rows$it_ok), sum(patient_rows$it_n)),
+      discont_agree = bootstrap_mean_ci(patient_rows$discont_agree, sum(patient_rows$ds_ok), sum(patient_rows$ds_n)),
+      intent_lines  = sum(patient_rows$it_n),
+      discont_lines = sum(patient_rows$ds_n))
+  }
+  comparators <- names(c(TABLE3_COMPARATORS, gpt4o = 1, deepseek_r1 = 1))
+  intervals   <- setNames(map(comparators, metric_intervals), comparators)
+
+  metrics <- map_dfr(comparators, function(comparator) {
+    ci <- intervals[[comparator]]
     tibble(
       Comparator = unname(c(TABLE3_COMPARATORS, gpt4o = "GPT-4o",
                             deepseek_r1 = "DeepSeek-R1")[comparator]),
       model = comparator,
-      `Exact-line (content) Jaccard`    = format_jaccard(bootstrap_mean_ci(patient_rows$jaccard_matched)),
-      `Unique-regimen-set Jaccard`      = format_jaccard(bootstrap_mean_ci(patient_rows$jaccard_uniqueset)),
-      `Line-start precision`            = format_percent(bootstrap_mean_ci(patient_rows$start_prec)),
-      `Line-start recall`               = format_percent(bootstrap_mean_ci(patient_rows$start_rec)),
-      `Line-start F1`                   = format_percent(bootstrap_mean_ci(patient_rows$start_f1)),
-      `Exact-line (content) precision`  = format_percent(bootstrap_mean_ci(patient_rows$exact_prec)),
-      `Exact-line (content) recall`     = format_percent(bootstrap_mean_ci(patient_rows$exact_rec)),
-      `Exact-line (content) F1`         = format_percent(bootstrap_mean_ci(patient_rows$exact_f1)),
-      `Exact-line (content+order) F1`   = format_percent(bootstrap_mean_ci(patient_rows$exseq_f1)),
-      `Start-date agreement (±30d)`     = format_percent(bootstrap_mean_ci(patient_rows$start_agree,
-                                            sum(patient_rows$st_ok), sum(patient_rows$st_n))),
-      `Stop-date agreement (±30d)`      = format_percent(bootstrap_mean_ci(patient_rows$stop_agree,
-                                            sum(patient_rows$sp_ok), sum(patient_rows$sp_n))),
-      `Treatment-intent agreement`      = format_percent(bootstrap_mean_ci(patient_rows$intent_agree,
-                                            sum(patient_rows$it_ok), sum(patient_rows$it_n))),
-      `Discontinuation-reason agreement`= format_percent(bootstrap_mean_ci(patient_rows$discont_agree,
-                                            sum(patient_rows$ds_ok), sum(patient_rows$ds_n))))
-  }
-  metrics <- map_dfr(names(c(TABLE3_COMPARATORS, gpt4o = 1, deepseek_r1 = 1)), metric_row)
+      `Exact-line (content) Jaccard`    = format_jaccard(ci$jaccard),
+      `Unique-regimen-set Jaccard`      = format_jaccard(ci$unique_set),
+      `Line-start precision`            = format_percent(ci$start_prec),
+      `Line-start recall`               = format_percent(ci$start_rec),
+      `Line-start F1`                   = format_percent(ci$start_f1),
+      `Exact-line (content) precision`  = format_percent(ci$exact_prec),
+      `Exact-line (content) recall`     = format_percent(ci$exact_rec),
+      `Exact-line (content) F1`         = format_percent(ci$exact_f1),
+      `Exact-line (content+order) F1`   = format_percent(ci$exseq_f1),
+      `Start-date agreement (±30d)`     = format_percent(ci$start_agree),
+      `Stop-date agreement (±30d)`      = format_percent(ci$stop_agree),
+      `Treatment-intent agreement`      = format_percent(ci$intent_agree),
+      `Discontinuation-reason agreement`= format_percent(ci$discont_agree))
+  })
+
+  # Matched-line agreement (Figure 2)
+  matched_line_agreement <- map_dfr(comparators, function(comparator) {
+    ci <- intervals[[comparator]]
+    tibble(model = comparator,
+           attribute = c("Treatment intent", "Reason for discontinuation"),
+           est = c(ci$intent_agree[1], ci$discont_agree[1]),
+           lo  = c(ci$intent_agree[2], ci$discont_agree[2]),
+           hi  = c(ci$intent_agree[3], ci$discont_agree[3]),
+           matched_lines = c(ci$intent_lines, ci$discont_lines))
+  })
 
   table3 <- metrics %>% filter(model %in% names(TABLE3_COMPARATORS)) %>%
     mutate(model = factor(model, levels = names(TABLE3_COMPARATORS))) %>%
@@ -368,7 +396,8 @@ build_line_metrics <- function() {
   out_path <- file.path(TBL_DIR, "Table3_line_metrics.xlsx")
   write_xlsx(list(Table3 = table3, all_comparators = select(metrics, -model),
                   s2_line_rows = s2_line_rows, per_patient = per_patient,
-                  reconciliation = line_counts), out_path)
+                  reconciliation = line_counts,
+                  matched_line_agreement = matched_line_agreement), out_path)
 
   cat("\nLine-start detection counts\n")
   print(as.data.frame(line_counts))

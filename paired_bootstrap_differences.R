@@ -1,30 +1,11 @@
-###############################################################################
-# paired_bootstrap_differences.R
-#
-# Paired patient-level bootstrap of differences between abstraction sources
-# measured on the same 100 patients.
-#   - Mean patient-level Jaccard similarity, drugs and exact lines:
-#     each LLM minus the second oncologist (both scored against the expert);
-#     Gemini 2.5 Pro scored against GPT-5 minus the second oncologist scored
-#     against the expert; research coordinators minus each LLM.
-#   - Median overall and recurrence-free survival (death at last follow-up, as
-#     in Figure 4): each LLM-derived dataset minus the expert-derived dataset.
-#   - Cox log hazard ratios (conventional censoring, as in Supplementary Table 9):
-#     each LLM-derived minus expert-derived, reported as a ratio of hazard ratios.
-# One bootstrap draw resamples patients with replacement and recomputes every
-# statistic on that draw, so each patient's expert, oncologist and LLM values
-# stay together. Intervals are BCa with a percentile fallback, as in config.R.
-#
+# Paired patient-level bootstrap (BCa) of differences between abstraction sources.
 # Usage: Rscript paired_bootstrap_differences.R <folder holding this code>
-# Run after manuscript_tables.R, which writes the per-patient Jaccard files.
-# Prints aggregate values only.
-###############################################################################
 
 analysis_code_folder <- normalizePath(commandArgs(TRUE)[1])
 setwd(analysis_code_folder)
 invisible(capture.output(suppressMessages(suppressWarnings(source("manuscript_tables.R")))))
 
-# Reuse the Figure 4 survival builders exactly as written in manuscript_figures.R.
+# Figure 4 survival builders from manuscript_figures.R
 figure_code <- parse("manuscript_figures.R")
 for (expression in figure_code) {
   if (is.call(expression) && identical(expression[[1]], as.name("<-")) &&
@@ -33,20 +14,20 @@ for (expression in figure_code) {
 
 best_llms <- c(gpt5 = "GPT-5", gemini_2_5 = "Gemini 2.5")
 
-# Per-patient Jaccard values written by the pipeline
+# Per-patient Jaccard values
 drug_jaccard <- readxl::read_xlsx(file.path(INT_DIR, "wide_bag_jaccard_per_patient.xlsx"))
 line_jaccard <- readxl::read_xlsx(file.path(TBL_DIR, "Table3_line_metrics.xlsx"), sheet = "per_patient")
 line_jaccard_for <- function(model) line_jaccard %>% filter(model == !!model) %>% select(gsID, value = jaccard_matched)
 drug_jaccard_for <- function(column) drug_jaccard %>% select(gsID, value = all_of(column))
 
-# Exact-line Jaccard between the two best-performing LLMs, with Gemini 2.5 Pro in the reference position
+# Exact-line Jaccard, Gemini 2.5 Pro (reference) vs GPT-5
 llm_pair_line_jaccard <- load_treatment_lines() %>%
   filter(version %in% c("gemini_2_5", "gpt5")) %>%
   mutate(version = recode(version, gemini_2_5 = "v1")) %>%
   per_patient_metrics("gpt5") %>%
   select(gsID, value = jaccard_matched)
 
-# Figure 4 survival datasets (one row per patient per source)
+# Figure 4 survival datasets
 expert_km <- gt %>% transmute(gsID, init_dx = gt_init_dx, lrr_dx = gt_lrr_dx, met_dx = gt_met_dx,
                               death_date = gt_death, last_note = gt_last_note)
 survival_sets <- list(OS = list(Expert = build_os_lb(expert_km, "init_dx", "Expert")),
@@ -58,7 +39,7 @@ for (llm in names(best_llms)) {
   survival_sets$RFS[[llm]] <- build_rfs_lb(llm_km, "init_dx", "lrr_dx", "met_dx", llm, llm_stage_iv)
 }
 
-# Cox datasets from manuscript_tables.R, keyed by source label
+# Cox datasets from manuscript_tables.R
 cox_sets <- list(OS = os_sources, RFS = rfs_sources)
 
 resample <- function(per_patient, ids) {
@@ -94,7 +75,7 @@ statistics_for <- function(ids) {
         log_hazard_ratio(resample(sources[["Oncologist (GT)"]], ids), model$var)
     }
   }
-  # The two LLMs compared with each other, minus the two oncologists compared with each other
+  # LLM pair minus oncologist pair
   values["Drug Jaccard LLM pair minus oncologist pair"] <-
     mean(resample(drug_jaccard_for("jaccard_gemini_2_5_vs_gpt5"), ids)$value, na.rm = TRUE) -
     mean(resample(drug_jaccard_for("jaccard_v2_vs_v1"), ids)$value, na.rm = TRUE)

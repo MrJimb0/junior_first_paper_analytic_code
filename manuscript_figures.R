@@ -17,112 +17,6 @@ set.seed(RANDOM_SEED)
 
 ### Helper functions
 
-# is_crc = TRUE: the coordinator's metastatic date is scored against the expert's
-# metastatic date only, among stage 1-3 patients with an expert metastatic date
-# before CRC_CENSOR_DATE and a coordinator metastatic date.
-compute_agreement <- function(exp_df, exp_name, gt_df, tol = TOL_PRIMARY,
-                              is_crc = FALSE) {
-  m    <- inner_join(exp_df, gt_df, by = 'gsID')
-  rows <- list()
-
-  add_row <- function(variable, domain, vec) {
-    if (length(vec) == 0) return()
-    ci <- boot_ci(vec, mean)
-    rows[[length(rows) + 1]] <<- tibble(
-      variable = variable, domain = domain, strategy = exp_name,
-      n = length(vec), est = ci['est'], lo = ci['lo'], hi = ci['hi'])
-  }
-
-  # Dates
-  n_init  <- sum(!is.na(gt_df$gt_init_dx))
-  n_birth <- sum(!is.na(gt_df$gt_birth))
-  # Recurrence dates: recurrences only -- exclude de novo Stage 4 patients
-  stage4_gsids <- if ('gt_stage' %in% names(gt_df))
-    gt_df$gsID[!is.na(gt_df$gt_stage) & gt_df$gt_stage == '4']
-  else character(0)
-  n_lrr   <- sum(!is.na(gt_df$gt_lrr_dx) & !(gt_df$gsID %in% stage4_gsids))
-  n_met <- sum(!is.na(gt_df$gt_met_dx) &
-               !(gt_df$gsID %in% stage4_gsids))
-  date_vars <- setNames(
-    list(c('init_dx', 'gt_init_dx'),
-         c('lrr_dx',  'gt_lrr_dx'),
-         c('birth',   'gt_birth')),
-    c(sprintf('Initial Date Dx (n=%d)', n_init),
-      sprintf('Locoregional Recurrence Date Dx (n=%d)', n_lrr),
-      sprintf('Date of Birth (n=%d)', n_birth)))
-  for (vname in names(date_vars)) {
-    cols <- date_vars[[vname]]
-    if (!cols[1] %in% names(m)) next
-    # init_dx: na_as_wrong=TRUE -- every patient has a diagnosis date, so missing = failure
-    # LRR/birth: na_as_wrong=FALSE -- detection captured by "Patient Had Recurrence" row;
-    #   date accuracy assessed only among matched cases (both sides have a date)
-    use_strict <- cols[1] == 'init_dx'
-    scored <- if (cols[1] == 'lrr_dx') m %>% filter(!(gsID %in% stage4_gsids)) else m
-    add_row(vname, 'Dates', date_agree_vec(scored[[cols[1]]], scored[[cols[2]]], tol,
-                                           na_as_wrong = use_strict))
-  }
-  # Metastatic date: recurrent cases only (exclude de novo Stage 4).
-  # CRC is scored strictly (met_dx only) among non-Stage 4 patients who have a
-  # pre-censor GT met date and a CRC met date.
-  if ('met_dx' %in% names(m) && 'gt_met_dx' %in% names(m)) {
-    m_met <- m %>% filter(!(gsID %in% stage4_gsids))
-    if (is_crc) {
-      # CRC: strict metastatic-only comparison (same as LLMs).
-      # Denominator = non-Stage4 patients with GT met_dx pre-censor.
-      m_crc <- m_met %>%
-        filter(!is.na(gt_met_dx), gt_met_dx < CRC_CENSOR_DATE, !is.na(met_dx))
-      n_met_crc <- nrow(m_crc)
-      add_row(sprintf('Metastatic Date Dx (n=%d)', n_met_crc), 'Dates',
-              date_agree_vec(m_crc$met_dx, m_crc$gt_met_dx, tol))
-    } else {
-      # na_as_wrong=FALSE: date accuracy among matched cases (both sides have date);
-      # detection is captured by "Patient Had Recurrence" row
-      add_row(sprintf('Metastatic Date Dx (n=%d)', n_met), 'Dates',
-              date_agree_vec(m_met$met_dx, m_met$gt_met_dx, tol))
-    }
-  }
-  # Death date documented (presence/absence agreement)
-  if ('death_date' %in% names(m) && 'gt_death' %in% names(m)) {
-    llm_has <- !is.na(m$death_date)
-    gt_has  <- !is.na(m$gt_death)
-    add_row(sprintf('Date of Death (n=%d)', nrow(m)), 'Dates',
-            as.integer(llm_has == gt_has))
-  }
-
-  # Staging -- LLM-NA counts as wrong (denominator = GT-non-NA patients)
-  if ('stage' %in% names(m))
-    add_row('Initial Cancer Stage', 'Staging',
-            cat_agree_vec(m$stage, m$gt_stage, na_as_wrong = TRUE))
-
-  # Receptor status -- LLM-NA counts as wrong
-  if ('cap_hr' %in% names(m) && 'gt_hr' %in% names(m))
-    add_row('Hormone Receptor Status', 'Receptor Status',
-            cat_agree_vec(m$cap_hr, m$gt_hr, na_as_wrong = TRUE))
-  if ('cap_her2' %in% names(m) && 'gt_her2' %in% names(m))
-    add_row('HER2 Receptor Status', 'Receptor Status',
-            cat_agree_vec(m$cap_her2, m$gt_her2, na_as_wrong = TRUE))
-
-  # Clinical
-  if ('primary_onc' %in% names(m) && 'gt_primary_onc' %in% names(m))
-    add_row('Primary Oncologist', 'Clinical',
-            cat_agree_vec(m$primary_onc, m$gt_primary_onc))
-
-  # Genetics (mutated vs other) -- denominator = all matched patients (n=100)
-  n_all <- nrow(m)
-  gene_vars <- setNames(
-    list(c('brca', 'gt_brca'), c('pik3ca', 'gt_pik3ca'), c('esr1', 'gt_esr1')),
-    c(sprintf('Germline BRCA (n=%d)',  n_all),
-      sprintf('Somatic PIK3CA (n=%d)', n_all),
-      sprintf('Somatic ESR1 (n=%d)',   n_all)))
-  for (vname in names(gene_vars)) {
-    cols <- gene_vars[[vname]]
-    if (!cols[1] %in% names(m) || !cols[2] %in% names(m)) next
-    add_row(vname, 'Genetics', cat_agree_vec(m[[cols[1]]], m[[cols[2]]]))
-  }
-
-  bind_rows(rows)
-}
-
 # Event determined solely by presence of death_date.
 build_os <- function(df, dx_col, source_label) {
   df %>%
@@ -735,28 +629,6 @@ crc_fig2 <- crc_cleaned %>%
     init_dx = as.Date(date_initial_diagnosis),
     met_dx  = as.Date(date_first_metastatic_diagnosis))
 
-# Second Oncologist (v2) data for Fig 2
-v2_fig2 <- non_drug_long %>%
-  filter(version == 'v2') %>%
-  transmute(
-    gsID,
-    init_dx  = as.Date(date_initial_diagnosis),
-    lrr_dx   = as.Date(date_first_locoregional_recurrence),
-    met_dx   = as.Date(date_first_metastatic_diagnosis),
-    birth    = as.Date(birth_date),
-    stage    = as.character(stage_at_diagnosis),
-    cap_hr   = case_when(
-      str_detect(coalesce(hr_her2_status, ''), 'HR\\+') ~ 'HR+',
-      str_detect(coalesce(hr_her2_status, ''), 'HR-')   ~ 'HR-',
-      TRUE ~ NA_character_),
-    cap_her2 = case_when(
-      str_detect(coalesce(hr_her2_status, ''), 'HER2\\+') ~ 'HER2+',
-      str_detect(coalesce(hr_her2_status, ''), 'HER2-')   ~ 'HER2-',
-      TRUE ~ NA_character_),
-    brca   = binarize_mutation(brca_status),
-    pik3ca = binarize_mutation(pik3ca_status),
-    esr1   = binarize_mutation(esr1_status))
-
 # Drug comparison sets (for Jaccard in Fig 2 and S8)
 drug_sets <- drug_df %>%
   filter(!is.na(regimen_bag_of_drugs) & regimen_bag_of_drugs != '') %>%
@@ -819,136 +691,39 @@ S16_ORDER <- c('Second\nOncologist',
 
 ### Fig 2: Forest plot -- extraction agreement across variables by LLM
 
-# LLM agreement
-fig2_df <- map2_dfr(all_llm_data, ALL_LLMS, function(d, llm_id) {
-  compute_agreement(d, LLM_LABELS[llm_id], gt, TOL_PRIMARY)
-})
+# Estimates and CIs from manuscript_tables.R
+table_variables_for_figure <- c(
+  'Date of birth'                   = 'Date of Birth',
+  'Date of initial diagnosis'       = 'Initial Date Dx',
+  'Recurrence occurred'             = 'Patient Had Recurrence',
+  'Date of locoregional recurrence' = 'Locoregional Recurrence Date Dx',
+  'Date of metastatic diagnosis'    = 'Metastatic Date Dx',
+  'Exact date of death documented'  = 'Date of Death',
+  'Initial cancer stage'            = 'Initial Cancer Stage',
+  'HR status'                       = 'Hormone Receptor Status',
+  'HER2 status'                     = 'HER2 Receptor Status',
+  'Primary oncologist'              = 'Primary Oncologist',
+  'Germline BRCA'                   = 'Germline BRCA',
+  'Somatic PIK3CA'                  = 'Somatic PIK3CA',
+  'Somatic ESR1'                    = 'Somatic ESR1')
 
-# Research Coordinator agreement
-if (!is.null(crc_fig2))
-  fig2_df <- bind_rows(fig2_df,
-                       compute_agreement(crc_fig2, 'Research Coordinator',
-                                         gt, TOL_PRIMARY, is_crc = TRUE))
+variable_rows <- read_xlsx(file.path(TBL_DIR, 'TableS2_full_model_performance.xlsx'),
+                           sheet = 'detail_with_counts') %>%
+  filter(Variable %in% names(table_variables_for_figure),
+         Tolerance %in% c(paste0('\u00b1', TOL_PRIMARY, ' days'), 'Exact match')) %>%
+  transmute(variable = unname(table_variables_for_figure[Variable]), domain = Category,
+            strategy = recode(LLM, 'Gemini 2.5' = 'Gemini 2.5 Pro'),
+            n = `Evaluable N`, est, lo, hi)
 
-# Second Oncologist (v2) agreement
-fig2_df <- bind_rows(fig2_df,
-                     compute_agreement(v2_fig2, 'Second Oncologist', gt, TOL_PRIMARY))
+line_strategy_labels <- c(v2 = 'Second Oncologist', LLM_LABELS, crc = 'Research Coordinator')
+matched_line_rows <- read_xlsx(file.path(TBL_DIR, 'Table3_line_metrics.xlsx'),
+                               sheet = 'matched_line_agreement') %>%
+  transmute(variable = recode(attribute, 'Treatment intent' = 'Curative v Palliative Intent',
+                              'Reason for discontinuation' = 'Progression vs Other Reason for Stopping'),
+            domain = 'Systemic Therapy', strategy = unname(line_strategy_labels[model]),
+            n = matched_lines, est, lo, hi)
 
-# Add "Patient Had Recurrence" (any LRR or met date = yes) -- Fig 2 only
-recur_agree <- function(d, strategy_name, censor_date = NULL) {
-  m <- inner_join(d, gt, by = 'gsID')
-  if (!all(c('gt_lrr_dx', 'gt_met_dx') %in% names(m))) return(tibble())
-  # de novo Stage 4 is metastatic at presentation, not a recurrence
-  m <- m %>% filter(!coalesce(gt_stage == '4', FALSE))
-  llm_lrr <- if ('lrr_dx' %in% names(m)) m$lrr_dx else as.Date(rep(NA, nrow(m)))
-  llm_met <- if ('met_dx' %in% names(m)) m$met_dx else as.Date(rep(NA, nrow(m)))
-  recur_llm <- if_else(!is.na(llm_lrr) | !is.na(llm_met),         'yes', 'no')
-  # Apply censor date to GT if provided (for CRC: only count GT events before censor)
-  gt_lrr <- m$gt_lrr_dx
-  gt_met <- m$gt_met_dx
-  if (!is.null(censor_date)) {
-    gt_lrr <- if_else(!is.na(gt_lrr) & gt_lrr < censor_date, gt_lrr, as.Date(NA))
-    gt_met <- if_else(!is.na(gt_met) & gt_met < censor_date, gt_met, as.Date(NA))
-  }
-  recur_gt  <- if_else(!is.na(gt_lrr) | !is.na(gt_met), 'yes', 'no')
-  vec <- as.integer(recur_llm == recur_gt)
-  ci  <- boot_ci(vec, mean)
-  tibble(variable = sprintf('Patient Had Recurrence (n=%d)', length(vec)),
-         domain = 'Dates', strategy = strategy_name,
-         n = length(vec), est = ci['est'], lo = ci['lo'], hi = ci['hi'])
-}
-
-recur_rows <- map2_dfr(all_llm_data, ALL_LLMS,
-                       ~ recur_agree(.x, LLM_LABELS[.y]))
-# Scored but not shown: coordinators abstracted no locoregional recurrence, so their
-# recurrence status is not comparable. Scoring it keeps the random-number stream, and
-# so every later bootstrap and jitter, the same as when the row was plotted.
-if (!is.null(crc_fig2))
-  invisible(recur_agree(crc_fig2, 'Research Coordinator', censor_date = CRC_CENSOR_DATE))
-
-recur_rows <- bind_rows(recur_rows, recur_agree(v2_fig2, 'Second Oncologist'))
-
-fig2_df <- bind_rows(fig2_df, recur_rows)
-
-# Treatment Intent + ReasonStop -- line-level accuracy (matched by gsID + Start +/- TOL_PRIMARY days)
-v1_intent_ref <- drug_df %>%
-  filter(version == 'v1') %>%
-  mutate(gsID = as.character(gsID)) %>%
-  select(gsID, Start_v1 = Start, TreatmentIntent_v1 = TreatmentIntent)
-
-v1_reason_ref <- drug_df %>%
-  filter(version == 'v1') %>%
-  mutate(gsID = as.character(gsID)) %>%
-  select(gsID, Start_v1 = Start, ReasonStop_v1 = ReasonStop)
-
-# CRC-censored v1 reference: only v1 lines started before CRC_CENSOR_DATE
-v1_intent_ref_crc <- drug_df %>%
-  filter(version == 'v1', is.na(Start) | Start <= CRC_CENSOR_DATE) %>%
-  mutate(gsID = as.character(gsID)) %>%
-  select(gsID, Start_v1 = Start, TreatmentIntent_v1 = TreatmentIntent)
-
-v1_reason_ref_crc <- drug_df %>%
-  filter(version == 'v1', is.na(Start) | Start <= CRC_CENSOR_DATE) %>%
-  mutate(gsID = as.character(gsID)) %>%
-  select(gsID, Start_v1 = Start, ReasonStop_v1 = ReasonStop)
-
-# Patient-clustered bootstrap for a pooled proportion: resample PATIENTS (gsID)
-# with replacement, pool their matched lines, take the mean (CI unit = patient).
-patient_boot_ci <- function(line_df, agree_col) {
-  if (nrow(line_df) == 0) return(c(est = NA_real_, lo = NA_real_, hi = NA_real_))
-  by_pt <- split(line_df[[agree_col]], line_df$gsID)
-  est   <- mean(line_df[[agree_col]])
-  b <- boot::boot(seq_along(by_pt), R = N_BOOT,
-                  statistic = function(ids, i) mean(unlist(by_pt[ids[i]], use.names = FALSE)))
-  ci <- tryCatch(boot::boot.ci(b, type = 'bca'),
-                 error = function(e) tryCatch(boot::boot.ci(b, type = 'perc'), error = function(e2) NULL))
-  if (!is.null(ci$bca))     return(c(est = est, lo = ci$bca[4],     hi = ci$bca[5]))
-  if (!is.null(ci$percent)) return(c(est = est, lo = ci$percent[4], hi = ci$percent[5]))
-  c(est = est, lo = NA_real_, hi = NA_real_)
-}
-
-# Matched-line attributes (treatment intent, reason for stopping) reuse the
-# per-patient output of line_metrics.R, so denominators and agreement match
-# Table 3 and Table S2. Denominator = matched lines where both sides documented
-# the attribute.
-line_metrics_per_patient <- read_xlsx(file.path(TBL_DIR, 'Table3_line_metrics.xlsx'),
-                                      sheet = 'per_patient')
-
-# Patient-clustered bootstrap of a pooled proportion from per-patient (ok, n) counts.
-patient_boot_ci_counts <- function(ok, n) {
-  keep <- !is.na(n) & n > 0; ok <- ok[keep]; n <- n[keep]
-  if (!length(n)) return(c(est = NA_real_, lo = NA_real_, hi = NA_real_, N = 0))
-  est <- sum(ok) / sum(n)
-  b <- boot::boot(seq_along(n), R = N_BOOT,
-                  statistic = function(idx, i) sum(ok[idx[i]]) / sum(n[idx[i]]))
-  ci <- tryCatch(boot::boot.ci(b, type = 'bca'),
-                 error = function(e) tryCatch(boot::boot.ci(b, type = 'perc'), error = function(e2) NULL))
-  lo <- hi <- NA_real_
-  if (!is.null(ci$bca))          { lo <- ci$bca[4];     hi <- ci$bca[5] }
-  else if (!is.null(ci$percent)) { lo <- ci$percent[4]; hi <- ci$percent[5] }
-  c(est = est, lo = lo, hi = hi, N = sum(n))
-}
-
-line_metrics_model_map <- c('Second Oncologist' = 'v2',
-                   setNames(ALL_LLMS, LLM_LABELS),
-                   'Research Coordinator' = 'crc')
-drug_class_rows <- map2_dfr(line_metrics_model_map, names(line_metrics_model_map), function(mid, lbl) {
-  d <- line_metrics_per_patient[line_metrics_per_patient$model == mid, , drop = FALSE]
-  if (!nrow(d)) return(tibble())
-  ci_i <- patient_boot_ci_counts(d$it_ok, d$it_n)
-  ci_d <- patient_boot_ci_counts(d$ds_ok, d$ds_n)
-  bind_rows(
-    tibble(variable = 'Curative v Palliative Intent', domain = 'Systemic Therapy',
-           strategy = lbl, n = unname(ci_i['N']),
-           est = unname(ci_i['est']), lo = unname(ci_i['lo']), hi = unname(ci_i['hi'])),
-    tibble(variable = 'Progression vs Other Reason for Stopping', domain = 'Systemic Therapy',
-           strategy = lbl, n = unname(ci_d['N']),
-           est = unname(ci_d['est']), lo = unname(ci_d['lo']), hi = unname(ci_d['hi']))
-  )
-})
-
-fig2_df <- bind_rows(fig2_df, drug_class_rows)
-
+fig2_df <- bind_rows(variable_rows, matched_line_rows)
 # -- Console: print n values per variable per strategy (for manuscript footnotes) --
 cat('\n=== Fig 2 / FigS1 -- n values by variable and strategy ===\n')
 n_tbl <- fig2_df %>%
@@ -1148,7 +923,7 @@ p_fig3 <- (p_os | p_rfs)
 ggsave(file.path(FIG_DIR, 'Fig3_KM_curves.png'), p_fig3,
        width = 16, height = 6.5, dpi = 300, bg = 'white')
 
-# -- Inline stats: OS and RFS medians (for manuscript text); paired differences are in paired_bootstrap_differences.R
+# -- Inline stats: OS and RFS medians (for manuscript text)
 cat('\n=== Fig 3 KM inline stats (lower bound, for manuscript text) ===\n')
 for (km_obj in list(list(data = all_os_lb, label = 'Overall Survival'),
                     list(data = all_rfs_lb, label = 'Recurrence-Free Survival'))) {
@@ -1265,8 +1040,8 @@ if (length(disp_rows) > 0) {
 
 ### Fig S3: Confusion matrices (stage, subtype)
 
-# FigS3: GPT-5 and Gemini 2.5 Pro confusion matrices, color-coded by LLM
-CM_LLMS <- c('gpt5', 'gemini_2_5')
+# FigS3: Gemini 2.5 Pro and GPT-5 confusion matrices, color-coded by LLM
+CM_LLMS <- c('gemini_2_5', 'gpt5')
 
 stage_plots <- map(CM_LLMS, function(llm_id) {
   m <- inner_join(all_llm_data[[llm_id]], gt, by = 'gsID')
@@ -1542,6 +1317,8 @@ if (nrow(s16_long) > 0) {
 # Panel B: matched-line regimen Jaccard from the line_metrics.R per-patient sheet,
 # the same metric as Table 3 and Table S2. A line counts as shared only when the
 # chronological match pairs it and the regimen content is identical.
+line_metrics_per_patient <- read_xlsx(file.path(TBL_DIR, 'Table3_line_metrics.xlsx'),
+                                      sheet = 'per_patient')
 s15_versions <- intersect(c('v2', 'gemini_2_5', 'gpt5', 'gpt4o', 'deepseek_r1', 'crc'),
                           unique(line_metrics_per_patient$model))
 
