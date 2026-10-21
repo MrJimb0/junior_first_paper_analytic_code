@@ -312,20 +312,16 @@ table1 <- bind_rows(tbl2_rows)
 
 # TABLE S2: Accuracy across variables by ingestion strategy
 
-# "X%\n[lo - hi]" with an exact (Clopper-Pearson) 95% CI
-fmt_exact_pct_ci <- function(k, n) {
-  if (n == 0) return("\u2014")
+# Exact (Clopper-Pearson) proportion and 95% CI
+exact_ci <- function(k, n) {
+  if (n == 0) return(c(est = NA_real_, lo = NA_real_, hi = NA_real_))
   ci <- binom.test(k, n)$conf.int
-  sprintf("%.0f%%\n[%.0f - %.0f]", 100 * k / n, 100 * ci[1], 100 * ci[2])
+  c(est = k / n, lo = ci[1], hi = ci[2])
 }
 
 compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
   m <- inner_join(exp_df, gt_df, by = "gsID")
   rows <- list()
-  # Scoring rules shared with Figure 2: a missing diagnosis date counts as wrong;
-  # recurrence measures exclude de novo stage 4 (metastatic at presentation), and
-  # recurrence dates are scored among events found by both sources, with detection
-  # reported separately as sensitivity and PPV.
   de_novo_stage4 <- coalesce(m$gt_stage == "4", FALSE)
   recurrence_date_vars <- c("Date of locoregional recurrence", "Date of metastatic diagnosis")
 
@@ -351,7 +347,8 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
       N_GT       = n_gt,
       N          = length(vec),
       Extraction_Rate = if (n_gt > 0) sprintf("%.0f%%", length(vec) / n_gt * 100) else "\u2014",
-      Agreement  = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"])
+      Agreement  = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"]),
+      est = unname(ci["est"]), lo = unname(ci["lo"]), hi = unname(ci["hi"])
     )))
   }
 
@@ -395,7 +392,8 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
       N_GT       = n_gt,
       N          = length(vec),
       Extraction_Rate = if (n_gt > 0) sprintf("%.0f%%", n_extracted / n_gt * 100) else "\u2014",
-      Agreement  = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"])
+      Agreement  = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"]),
+      est = unname(ci["est"]), lo = unname(ci["lo"]), hi = unname(ci["hi"])
     )))
   }
 
@@ -413,7 +411,8 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
         N_GT            = sum(gt_has),
         N               = length(vec),
         Extraction_Rate = "100%",
-        Agreement       = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"])
+        Agreement       = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"]),
+        est = unname(ci["est"]), lo = unname(ci["lo"]), hi = unname(ci["hi"])
       )))
     }
   }
@@ -435,14 +434,13 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
         N_GT            = sum(gt_recur),
         N               = length(vec),
         Extraction_Rate = "100%",
-        Agreement       = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"])
+        Agreement       = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"]),
+        est = unname(ci["est"]), lo = unname(ci["lo"]), hi = unname(ci["hi"])
       )))
     }
   }
 
-  # Recurrence detection among stage 1-3 patients: sensitivity / PPV with exact
-  # (Clopper-Pearson) 95% CIs. A source without a column (coordinators did not
-  # abstract locoregional recurrence) gets no row for that event.
+  # Recurrence detection among stage 1-3 patients: sensitivity and PPV
   stage13 <- m[!de_novo_stage4, ]
   has_event <- function(cols) {
     if (!all(cols %in% names(stage13))) return(NULL)
@@ -459,13 +457,15 @@ compute_accuracy_row <- function(exp_df, exp_name, gt_df, tol) {
     true_positives <- sum(predicted & reference)
     for (measure in c("sensitivity", "PPV")) {
       denominator <- if (measure == "sensitivity") sum(reference) else sum(predicted)
+      ci <- exact_ci(true_positives, denominator)
       rows <- c(rows, list(tibble(
         Variable = paste0(event, ": ", measure), Category = "Detection", LLM = exp_name,
         Tolerance       = "Event present",
         N_GT            = sum(reference),
         N               = denominator,
         Extraction_Rate = "\u2014",
-        Agreement       = fmt_exact_pct_ci(true_positives, denominator)
+        Agreement       = fmt_pct_ci(ci["est"], ci["lo"], ci["hi"]),
+        est = unname(ci["est"]), lo = unname(ci["lo"]), hi = unname(ci["hi"])
       )))
     }
   }
@@ -500,7 +500,7 @@ tbl2_all <- bind_rows(
 tbl2_sens <- map_dfr(TOL_SENS, function(tol) {
   map2_dfr(all_llm_data, ALL_LLMS, function(d, llm_id) {
     compute_accuracy_row(d, LLM_LABELS[llm_id], gt, tol) %>%
-      filter(Category == "Dates")
+      filter(Category == "Dates", Tolerance != "Exact match")
   })
 })
 
@@ -776,7 +776,7 @@ for (mod in models) {
       Source       = src_label,
       N            = nrow(df),
       Events       = sum(df$event),
-      # Raw log-HR and SE at full precision, not the rounded HR/CI display strings.
+      # Raw log-HR and SE
       loghr        = unname(s$coefficients["x", "coef"]),
       se_loghr     = unname(s$coefficients["x", "se(coef)"]),
       `HR [95% CI]` = sprintf("%.2f\n[%.2f - %.2f]",
@@ -794,8 +794,7 @@ if (length(s1_rows) > 0) {
 }
 
 # Wide format for Appendix Table 5
-# Sources displayed in the table. The ratio of each LLM-derived to the expert-derived
-# hazard ratio comes from paired_bootstrap_differences.R.
+# Sources displayed in the table
 s5_sources <- c("Oncologist (GT)", "GPT-5", "Gemini 2.5")
 
 if (nrow(cox_tbl) > 0) {
@@ -1028,7 +1027,7 @@ s2_detail <- table2 %>%
          `Correct (approx.)` = ifelse(is.na(`Agreement %`) | is.na(N), NA_integer_,
                                       round(`Agreement %` / 100 * N))) %>%
   select(Variable, Category, LLM, Tolerance, N_GT, `Evaluable N`,
-         `Correct (approx.)`, Extraction_Rate, Agreement)
+         `Correct (approx.)`, Extraction_Rate, Agreement, est, lo, hi)
 write_xlsx(list(wide = table2_wide, detail_with_counts = s2_detail),
            file.path(TBL_DIR, "TableS2_full_model_performance.xlsx"))
 

@@ -115,7 +115,7 @@ for (m in llms) {
     )
 }
 
-# The two best-performing LLMs compared with each other
+# Gemini 2.5 Pro vs GPT-5
 wide_bag_of_drugs_by_patient_version[["jaccard_gemini_2_5_vs_gpt5"]] <-
   map2_dbl(
     wide_bag_of_drugs_by_patient_version[["gemini_2_5"]],
