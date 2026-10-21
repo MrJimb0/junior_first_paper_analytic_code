@@ -4,7 +4,9 @@
 # Paired patient-level bootstrap of differences between abstraction sources
 # measured on the same 100 patients.
 #   - Mean patient-level Jaccard similarity, drugs and exact lines:
-#     each LLM minus the second oncologist (both scored against the expert).
+#     each LLM minus the second oncologist (both scored against the expert);
+#     Gemini 2.5 Pro scored against GPT-5 minus the second oncologist scored
+#     against the expert; research coordinators minus each LLM.
 #   - Median overall and recurrence-free survival (death at last follow-up, as
 #     in Figure 4): each LLM-derived dataset minus the expert-derived dataset.
 #   - Cox log hazard ratios (conventional censoring, as in Supplementary Table 9):
@@ -36,6 +38,13 @@ drug_jaccard <- readxl::read_xlsx(file.path(INT_DIR, "wide_bag_jaccard_per_patie
 line_jaccard <- readxl::read_xlsx(file.path(TBL_DIR, "Table3_line_metrics.xlsx"), sheet = "per_patient")
 line_jaccard_for <- function(model) line_jaccard %>% filter(model == !!model) %>% select(gsID, value = jaccard_matched)
 drug_jaccard_for <- function(column) drug_jaccard %>% select(gsID, value = all_of(column))
+
+# Exact-line Jaccard between the two best-performing LLMs, with Gemini 2.5 Pro in the reference position
+llm_pair_line_jaccard <- load_treatment_lines() %>%
+  filter(version %in% c("gemini_2_5", "gpt5")) %>%
+  mutate(version = recode(version, gemini_2_5 = "v1")) %>%
+  per_patient_metrics("gpt5") %>%
+  select(gsID, value = jaccard_matched)
 
 # Figure 4 survival datasets (one row per patient per source)
 expert_km <- gt %>% transmute(gsID, init_dx = gt_init_dx, lrr_dx = gt_lrr_dx, met_dx = gt_met_dx,
@@ -85,6 +94,22 @@ statistics_for <- function(ids) {
         log_hazard_ratio(resample(sources[["Oncologist (GT)"]], ids), model$var)
     }
   }
+  # The two LLMs compared with each other, minus the two oncologists compared with each other
+  values["Drug Jaccard LLM pair minus oncologist pair"] <-
+    mean(resample(drug_jaccard_for("jaccard_gemini_2_5_vs_gpt5"), ids)$value, na.rm = TRUE) -
+    mean(resample(drug_jaccard_for("jaccard_v2_vs_v1"), ids)$value, na.rm = TRUE)
+  values["Line Jaccard LLM pair minus oncologist pair"] <-
+    mean(resample(llm_pair_line_jaccard, ids)$value, na.rm = TRUE) -
+    mean(resample(line_jaccard_for("v2"), ids)$value, na.rm = TRUE)
+  # Research coordinators minus each LLM
+  for (llm in ALL_LLMS) {
+    values[paste("Drug Jaccard coordinators minus", llm)] <-
+      mean(resample(drug_jaccard_for("jaccard_crc_vs_v1"), ids)$value, na.rm = TRUE) -
+      mean(resample(drug_jaccard_for(paste0("jaccard_", llm, "_vs_v1")), ids)$value, na.rm = TRUE)
+    values[paste("Line Jaccard coordinators minus", llm)] <-
+      mean(resample(line_jaccard_for("crc"), ids)$value, na.rm = TRUE) -
+      mean(resample(line_jaccard_for(llm), ids)$value, na.rm = TRUE)
+  }
   values
 }
 
@@ -117,3 +142,11 @@ for (outcome in c("OS", "RFS")) for (source in names(survival_sets[[outcome]])) 
   cat(sprintf("  %-4s %-11s n=%3d median %.1f [%.1f, %.1f]\n", outcome, source, nrow(survival_sets[[outcome]][[source]]),
               fit_table["median"], fit_table["0.95LCL"], fit_table["0.95UCL"]))
 }
+
+cat("\nMean patient-level Jaccard similarity, Gemini 2.5 Pro vs GPT-5 [95% CI]\n")
+set.seed(RANDOM_SEED)
+drug_pair <- boot_ci_95(drug_jaccard$jaccard_gemini_2_5_vs_gpt5)
+cat(sprintf("  Drugs  %.2f [%.2f, %.2f]\n", mean(drug_jaccard$jaccard_gemini_2_5_vs_gpt5, na.rm = TRUE), drug_pair[1], drug_pair[2]))
+set.seed(RANDOM_SEED)
+line_pair <- bootstrap_mean_ci(llm_pair_line_jaccard$value[!is.na(llm_pair_line_jaccard$value)])
+cat(sprintf("  Lines  %.2f [%.2f, %.2f]\n", line_pair[1], line_pair[2], line_pair[3]))

@@ -776,8 +776,7 @@ for (mod in models) {
       Source       = src_label,
       N            = nrow(df),
       Events       = sum(df$event),
-      # Raw log-HR and SE retained so Cochran Q uses full precision, not the
-      # rounded HR/CI display strings.
+      # Raw log-HR and SE at full precision, not the rounded HR/CI display strings.
       loghr        = unname(s$coefficients["x", "coef"]),
       se_loghr     = unname(s$coefficients["x", "se(coef)"]),
       `HR [95% CI]` = sprintf("%.2f\n[%.2f - %.2f]",
@@ -795,32 +794,11 @@ if (length(s1_rows) > 0) {
 }
 
 # Wide format for Appendix Table 5
-# Sources displayed in the table — Cochran Q is computed across these 3 only
+# Sources displayed in the table. The ratio of each LLM-derived to the expert-derived
+# hazard ratio comes from paired_bootstrap_differences.R.
 s5_sources <- c("Oncologist (GT)", "GPT-5", "Gemini 2.5")
 
 if (nrow(cox_tbl) > 0) {
-  # Pairwise Cochran Q p-values, GT vs each LLM, from the full-precision log-HR and
-  # its SE rather than the rounded display strings. Q assumes independent estimates
-  # while these HRs come from the same patients, so it understates shared sampling
-  # variation and these p-values are heterogeneity screens only.
-  pairwise_q <- function(sub, src_a, src_b) {
-    pair <- filter(sub, Source %in% c(src_a, src_b))
-    ok   <- !is.na(pair$loghr) & !is.na(pair$se_loghr) & pair$se_loghr > 0
-    if (sum(ok) < 2) return("\u2014")
-    w  <- 1 / pair$se_loghr[ok]^2
-    lh <- pair$loghr[ok]
-    Q  <- sum((lh - weighted.mean(lh, w))^2 * w)
-    fmt_p(pchisq(Q, sum(ok) - 1, lower.tail = FALSE))
-  }
-
-  cq_wide <- map_dfr(unique(cox_tbl$Equation), function(eq) {
-    sub <- filter(cox_tbl, Equation == eq, Source %in% s5_sources)
-    p_gpt5  <- pairwise_q(sub, "Oncologist (GT)", "GPT-5")
-    p_gemini <- pairwise_q(sub, "Oncologist (GT)", "Gemini 2.5")
-    tibble(Equation = eq,
-           `Cochran Q P value` = paste0(p_gpt5, "\n", p_gemini))
-  })
-
   eq_labels <- tibble(
     Equation  = c("OS ~ Stage IV", "OS ~ HR-negative",
                   "RFS ~ Stage III", "RFS ~ HR-negative"),
@@ -842,22 +820,19 @@ if (nrow(cox_tbl) > 0) {
     select(Equation, Source, `HR [95% CI]`) %>%
     pivot_wider(names_from = Source, values_from = `HR [95% CI]`) %>%
     left_join(eq_labels, by = "Equation") %>%
-    left_join(cq_wide,   by = "Equation") %>%
     mutate(Equation = factor(Equation, levels = eq_labels$Equation)) %>%
     arrange(Equation) %>%
     select(Outcome, Covariate,
            `Expert-derived HR (95% CI)`,
            `GPT-5-derived HR (95% CI)`,
-           `Gemini 2.5 Pro-derived HR (95% CI)`,
-           `Cochran Q P value`)
+           `Gemini 2.5 Pro-derived HR (95% CI)`)
 
 } else {
   cox_tbl_wide <- tibble(
     Outcome = character(), Covariate = character(),
     `Expert-derived HR (95% CI)`        = character(),
     `GPT-5-derived HR (95% CI)`         = character(),
-    `Gemini 2.5 Pro-derived HR (95% CI)`= character(),
-    `Cochran Q P value`                 = character()
+    `Gemini 2.5 Pro-derived HR (95% CI)`= character()
   )
 }
 
