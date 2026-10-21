@@ -979,9 +979,9 @@ if (file.exists(drug_rows_path)) {
   # Keep only the drug rows from DrugComparison; the systemic-therapy line rows come
   # from line_metrics.R so that Table S2 agrees with Table 3.
   drug_only <- drug_wide %>%
-    filter(grepl("^All prescribed anti-cancer drugs", `Clinical domain / variable`))
+    filter(grepl("^All anti-cancer drugs taken", `Clinical domain / variable`))
   line_block <- if (exists("s2_line_rows")) s2_line_rows else
-    filter(drug_wide, !grepl("^All prescribed anti-cancer drugs", `Clinical domain / variable`))
+    filter(drug_wide, !grepl("^All anti-cancer drugs taken", `Clinical domain / variable`))
   table2_wide <- bind_rows(
     nondrug_sectioned,
     make_header_row("Systemic therapy"),

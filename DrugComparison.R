@@ -1034,10 +1034,10 @@ pivot_drug_row <- function(metric_col, row_label, metric_label) {
 }
 
 tableS2_drug_rows <- bind_rows(
-  pivot_drug_row("bag_jaccard",    "All prescribed anti-cancer drugs: Jaccard similarity", "Mean [95% CI]"),
-  pivot_drug_row("bag_precision",  "All prescribed anti-cancer drugs: precision",          "Mean (95% CI)"),
-  pivot_drug_row("bag_recall",     "All prescribed anti-cancer drugs: recall",             "Mean (95% CI)"),
-  pivot_drug_row("bag_f1",         "All prescribed anti-cancer drugs: F1 score",           "Mean (95% CI)"),
+  pivot_drug_row("bag_jaccard",    "All anti-cancer drugs taken: Jaccard similarity", "Mean [95% CI]"),
+  pivot_drug_row("bag_precision",  "All anti-cancer drugs taken: precision",          "Mean (95% CI)"),
+  pivot_drug_row("bag_recall",     "All anti-cancer drugs taken: recall",             "Mean (95% CI)"),
+  pivot_drug_row("bag_f1",         "All anti-cancer drugs taken: F1 score",           "Mean (95% CI)"),
   # ±90-day line-start and unique-regimen-set values from this script's matcher.
   # manuscript_tables.R replaces these rows with the line_metrics.R output for
   # Table S2 and Table 3.

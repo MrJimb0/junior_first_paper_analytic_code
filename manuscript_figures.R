@@ -487,7 +487,7 @@ plot_forest <- function(data, strat_order, palette, shapes, title,
                        labels = names(y_pos_map),
                        expand = expansion(add = Y_GAP * 0.6)) +
     labs(title = title,
-         x = 'Agreement (95% Bootstrap CI)',
+         x = 'Agreement (95% CI)',
          y = NULL, color = NULL, shape = NULL,
          caption = caption) +
     guides(color = guide_legend(nrow = 1, override.aes = list(size = 2.5)),
@@ -1233,7 +1233,7 @@ if (nzchar(CASE_PID)) {
          width = 9, height = 8, dpi = 300, bg = 'white')
 }
 
-### Fig 4 (top panel): All Anti-Cancer Drugs Prescribed vs Oncologist
+### Fig 4 (top panel): All Anti-Cancer Drugs Taken vs Oncologist
 ### Drug bag Jaccard similarity vs Oncologist (v1) -- component of Fig 4
 
 # Normalize only generic AI shorthand (keep specific drug names intact)
@@ -1307,7 +1307,7 @@ s16_sum <- s16_long %>%
 
 if (nrow(s16_long) > 0) {
   p_s16 <- plot_jaccard_violin(s16_long, s16_sum,
-                                'Similarity in All Anti-Cancer Drugs Prescribed Compared to Oncologist',
+                                'Similarity in All Anti-Cancer Drugs Taken Compared to Oncologist',
                                 S16_PAL, S16_ORDER)
 }
 
@@ -1340,7 +1340,7 @@ if (nrow(s15_long) > 0) {
               .groups = 'drop')
 
   p_lines_jac <- plot_jaccard_violin(s15_long, s15_sum,
-                                      'Therapy-Line Regimen Agreement vs Oncologist (order-aware matched Jaccard)',
+                                      'Therapy-Line Regimen Agreement vs Oncologist',
                                       S16_PAL, S16_ORDER)
 
   # FigS6: all 6 strategies (expanded violin -- mirrors current Fig4)
@@ -1357,7 +1357,7 @@ if (nrow(s15_long) > 0) {
   s16_sum_f4  <- s16_sum  %>% filter(label %in% FIG4_ORDER) %>%
     mutate(label = factor(label, levels = FIG4_ORDER))
   p_s16_f4 <- plot_jaccard_violin(s16_long_f4, s16_sum_f4,
-                                   'Similarity in All Anti-Cancer Drugs Prescribed Compared to Oncologist',
+                                   'Similarity in All Anti-Cancer Drugs Taken Compared to Oncologist',
                                    FIG4_PAL, FIG4_ORDER)
 
   s15_long_f4 <- s15_long %>% filter(label %in% FIG4_ORDER) %>%
@@ -1365,7 +1365,7 @@ if (nrow(s15_long) > 0) {
   s15_sum_f4  <- s15_sum  %>% filter(label %in% FIG4_ORDER) %>%
     mutate(label = factor(label, levels = FIG4_ORDER))
   p_lines_jac_f4 <- plot_jaccard_violin(s15_long_f4, s15_sum_f4,
-                                          'Therapy-Line Regimen Agreement vs Oncologist (order-aware matched Jaccard)',
+                                          'Therapy-Line Regimen Agreement vs Oncologist',
                                           FIG4_PAL, FIG4_ORDER)
 
   ggsave(file.path(FIG_DIR, 'Fig4_drug_lines_jaccard.png'),
